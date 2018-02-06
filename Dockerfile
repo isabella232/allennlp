@@ -59,6 +59,8 @@ COPY setup.py setup.py
 
 # Add model caching
 ARG CACHE_MODELS=false
+#Ted testing
+RUN pip freeze
 RUN ./scripts/cache_models.py
 
 # Optional argument to set an environment variable with the Git SHA
