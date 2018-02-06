@@ -68,4 +68,4 @@ ENV SOURCE_COMMIT $SOURCE_COMMIT
 LABEL maintainer="allennlp-contact@allenai.org"
 
 EXPOSE 8000
-CMD ["/bin/bash"]
+CMD ["python", "-m", "allennlp.run", "serve"]
