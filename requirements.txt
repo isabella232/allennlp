@@ -20,7 +20,8 @@ overrides
 nltk
 
 # Mainly used for the faster tokenizer.
-spacy>=2.0,<2.1
+#spacy>=2.0,<2.1
+spacy
 
 # Used by span prediction models.
 numpy
@@ -30,7 +31,10 @@ scipy
 scikit-learn
 
 # Training visualisation using tensorboard.
+tensorflow
 tensorboard
+tensorboard-pytorch
+image
 
 # Required by torch.utils.ffi
 cffi==1.11.2
