@@ -69,7 +69,7 @@ ENV SOURCE_COMMIT $SOURCE_COMMIT
 LABEL maintainer="allennlp-contact@allenai.org"
 
 # Cache the DEFAULT_MODELS during build
-RUN python -c "from allennlp.commands import serve; s = serve.Serve(); predictors = [ demo_model.predictor() for name, demo_model in s.trained_models.items()];"; exit 0
+RUN python -c "from allennlp.commands import serve; s = serve.Serve(); predictors = [ demo_model.predictor() for name, demo_model in s.trained_models.items()];"
 
 EXPOSE 8000
 CMD ["python", "-m", "allennlp.run", "serve"]
