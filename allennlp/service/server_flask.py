@@ -62,6 +62,8 @@ def run(port: int,
 
     app = make_app(static_dir, demo_db)
     CORS(app)
+    from .expert_extension import expert_extension
+    app.register_blueprint(expert_extension)
 
     for name, demo_model in trained_models.items():
         predictor = demo_model.predictor()
