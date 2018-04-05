@@ -55,8 +55,13 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
         file_path = cached_path(file_path)
         directory, filename = os.path.split(file_path)
         logger.info("Reading instances from lines in file at: %s", file_path)
-
         for parse in BracketParseCorpusReader(root=directory, fileids=[filename]).parsed_sents():
+
+            self._strip_functional_tags(parse)
+            # This is un-needed and clutters the label space.
+            # All the trees also contain a root S node.
+            if parse.label() == "VROOT":
+                parse = parse[0]
             pos_tags = [x[1] for x in parse.pos()] if self._use_pos_tags else None
             yield self.text_to_instance(parse.leaves(), pos_tags, parse)
 
@@ -100,7 +105,7 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
         fields: Dict[str, Field] = {"tokens": text_field}
 
         if self._use_pos_tags and pos_tags is not None:
-            pos_tag_field = SequenceLabelField(pos_tags, text_field, "pos_tags")
+            pos_tag_field = SequenceLabelField(pos_tags, text_field, label_namespace="pos")
             fields["pos_tags"] = pos_tag_field
         elif self._use_pos_tags:
             raise ConfigurationError("use_pos_tags was set to True but no gold pos"
@@ -109,10 +114,9 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
         gold_labels = []
 
         if gold_tree is not None:
-            gold_spans_with_pos_tags: Dict[Tuple[int, int], str] = {}
-            self._get_gold_spans(gold_tree, 0, gold_spans_with_pos_tags)
-            gold_spans = {span: label for (span, label)
-                          in gold_spans_with_pos_tags.items() if "-POS" not in label}
+            gold_spans: Dict[Tuple[int, int], str] = {}
+            self._get_gold_spans(gold_tree, 0, gold_spans)
+
         else:
             gold_spans = None
         for start, end in enumerate_spans(tokens):
@@ -124,15 +128,34 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
                 else:
                     gold_labels.append("NO-LABEL")
 
+        metadata = {"tokens": tokens}
         if gold_tree:
-            fields["gold_tree"] = MetadataField(gold_tree)
+            metadata["gold_tree"] = gold_tree
+        if self._use_pos_tags:
+            metadata["pos_tags"] = pos_tags
+
+        fields["metadata"] = MetadataField(metadata)
 
         span_list_field: ListField = ListField(spans)
         fields["spans"] = span_list_field
         if gold_tree is not None:
-            fields["span_labels"] = SequenceLabelField(gold_labels, span_list_field)
-
+            fields["span_labels"] = SequenceLabelField(gold_labels,
+                                                       span_list_field)
         return Instance(fields)
+
+    def _strip_functional_tags(self, tree: Tree) -> None:
+        """
+        Removes all functional tags from constituency labels in an NLTK tree.
+        We also strip off anything after a =, - or | character, because these
+        are functional tags which we don't want to use.
+
+        This modification is done in-place.
+        """
+        clean_label = tree.label().split("=")[0].split("-")[0].split("|")[0]
+        tree.set_label(clean_label)
+        for child in tree:
+            if not isinstance(child[0], str):
+                self._strip_functional_tags(child)
 
     def _get_gold_spans(self, # pylint: disable=arguments-differ
                         tree: Tree,
@@ -140,7 +163,15 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
                         typed_spans: Dict[Tuple[int, int], str]) -> int:
         """
         Recursively construct the gold spans from an nltk ``Tree``.
+        Labels are the constituents, and in the case of nested constituents
+        with the same spans, labels are concatenated in parent-child order.
+        For example, ``(S (NP (D the) (N man)))`` would have an ``S-NP`` label
+        for the outer span, as it has both ``S`` and ``NP`` label.
         Spans are inclusive.
+
+        TODO(Mark): If we encounter a gold nested labelling at test time
+        which we haven't encountered, we won't be able to run the model
+        at all.
 
         Parameters
         ----------
@@ -155,20 +186,16 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
         -------
         typed_spans : ``Dict[Tuple[int, int], str]``.
             A dictionary mapping all subtree spans in the parse tree
-            to their constituency labels. Leaf nodes have POS tag spans, which
-            are denoted by a label of "LABEL-POS".
+            to their constituency labels. POS tags are ignored.
         """
         # NLTK leaves are strings.
         if isinstance(tree[0], str):
             # The "length" of a tree is defined by
             # NLTK as the number of children.
             # We don't actually want the spans for leaves, because
-            # their labels are POS tags. However, it makes the
-            # indexing more straightforward, so we'll collect them
-            # and filter them out below. We subtract 1 from the end
-            # index so the spans are inclusive.
+            # their labels are POS tags. Instead, we just add the length
+            # of the word to the end index as we iterate through.
             end = index + len(tree)
-            typed_spans[(index, end - 1)] = tree.label() + "-POS"
         else:
             # otherwise, the tree has children.
             child_start = index
@@ -178,7 +205,18 @@ class PennTreeBankConstituencySpanDatasetReader(DatasetReader):
                 child_start = end
             # Set the end index of the current span to
             # the last appended index - 1, as the span is inclusive.
-            typed_spans[(index, end - 1)] = tree.label()
+            span = (index, end - 1)
+            current_span_label = typed_spans.get(span)
+            if current_span_label is None:
+                # This span doesn't have nested labels, just
+                # use the current node's label.
+                typed_spans[span] = tree.label()
+            else:
+                # This span has already been added, so prepend
+                # this label (as we are traversing the tree from
+                # the bottom up).
+                typed_spans[span] = tree.label() + "-" + current_span_label
+
         return end
 
     @classmethod

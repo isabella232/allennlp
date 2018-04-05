@@ -3,6 +3,7 @@
 .coverage
 doc/_build/
 .ipynb_checkpoints
+.pytest_cache/
 
 # build artifacts
 allennlp.egg-info/
@@ -10,7 +11,6 @@ allennlp.egg-info/
 build/
 dist/
 .mypy_cache
-
 
 # Elastic Beanstalk Files
 .elasticbeanstalk/*

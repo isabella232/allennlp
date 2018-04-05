@@ -11,14 +11,18 @@ import random
 import resource
 import subprocess
 import sys
+import os
 
 import torch
 import numpy
 import spacy
+from spacy.cli.download import download as spacy_download
 from spacy.language import Language as SpacyModelType
 
 from allennlp.common.checks import log_pytorch_version_info
 from allennlp.common.params import Params
+from allennlp.common.tqdm import Tqdm
+from allennlp.common.tee_logger import TeeLogger
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -49,6 +53,8 @@ def sanitize(x: Any) -> Any:  # pylint: disable=invalid-name,too-many-return-sta
     elif isinstance(x, (list, tuple)):
         # Lists and Tuples need their values sanitized
         return [sanitize(x_i) for x_i in x]
+    elif x is None:
+        return "None"
     else:
         raise ValueError("cannot sanitize {} of type {}".format(x, type(x)))
 
@@ -177,6 +183,34 @@ def prepare_environment(params: Params):
 
     log_pytorch_version_info()
 
+def prepare_global_logging(serialization_dir: str, file_friendly_logging: bool) -> None:
+    """
+    This function configures 3 global logging attributes - streaming stdout and stderr
+    to a file as well as the terminal, setting the formatting for the python logging
+    library and setting the interval frequency for the Tqdm progress bar.
+
+    Note that this function does not set the logging level, which is set in ``allennlp/run.py``.
+
+    Parameters
+    ----------
+    serializezation_dir : ``str``, required.
+        The directory to stream logs to.
+    file_friendly_logging : ``bool``, required.
+        Whether logs should clean the output to prevent carridge returns
+        (used to update progress bars on a single terminal line).
+    """
+    Tqdm.set_slower_interval(file_friendly_logging)
+    std_out_file = os.path.join(serialization_dir, "stdout.log")
+    sys.stdout = TeeLogger(std_out_file, # type: ignore
+                           sys.stdout,
+                           file_friendly_logging)
+    sys.stderr = TeeLogger(os.path.join(serialization_dir, "stderr.log"), # type: ignore
+                           sys.stderr,
+                           file_friendly_logging)
+
+    stdout_handler = logging.FileHandler(std_out_file)
+    stdout_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+    logging.getLogger().addHandler(stdout_handler)
 
 LOADED_SPACY_MODELS: Dict[Tuple[str, bool, bool, bool], SpacyModelType] = {}
 
@@ -187,6 +221,7 @@ def get_spacy_model(spacy_model_name: str, pos_tags: bool, parse: bool, ner: boo
     keyed by the options we used to create the spacy model, so any particular configuration only
     gets loaded once.
     """
+
     options = (spacy_model_name, pos_tags, parse, ner)
     if options not in LOADED_SPACY_MODELS:
         disable = ['vectors', 'textcat']
@@ -196,7 +231,13 @@ def get_spacy_model(spacy_model_name: str, pos_tags: bool, parse: bool, ner: boo
             disable.append('parser')
         if not ner:
             disable.append('ner')
-        spacy_model = spacy.load(spacy_model_name, disable=disable)
+        try:
+            spacy_model = spacy.load(spacy_model_name, disable=disable)
+        except OSError:
+            logger.warning(f"Spacy models '{spacy_model_name}' not found.  Downloading and installing.")
+            spacy_download(spacy_model_name)
+            spacy_model = spacy.load(spacy_model_name, disable=disable)
+
         LOADED_SPACY_MODELS[options] = spacy_model
     return LOADED_SPACY_MODELS[options]
 

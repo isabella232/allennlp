@@ -12,6 +12,8 @@ allennlp.service.predictors
 * :ref:`SemanticRoleLabelerPredictor<semantic-role-labeler>`
 * :ref:`SentenceTaggerPredictor<sentence-tagger>`
 * :ref:`CorefPredictor<coreference-resolution>`
+* :ref:`ConstituencyParserPredictor<constituency-parser>`
+* :ref:`SimpleSeq2SeqPredictor<simple-seq2seq>`
 
 .. _predictor:
 .. automodule:: allennlp.service.predictors.predictor
@@ -45,6 +47,18 @@ allennlp.service.predictors
 
 .. _coreference-resolution:
 .. automodule:: allennlp.service.predictors.coref
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. _constituency-parser:
+.. automodule:: allennlp.service.predictors.constituency_parser
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. _simple-seq2seq:
+.. automodule:: allennlp.service.predictors.simple_seq2seq
    :members:
    :undoc-members:
    :show-inheritance:

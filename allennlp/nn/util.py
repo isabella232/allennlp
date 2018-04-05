@@ -105,6 +105,39 @@ def sort_batch_by_length(tensor: torch.autograd.Variable,
     return sorted_tensor, sorted_sequence_lengths, restoration_indices, permutation_index
 
 
+def get_final_encoder_states(encoder_outputs: torch.Tensor,
+                             mask: torch.Tensor,
+                             bidirectional: bool = False) -> torch.Tensor:
+    """
+    Given the output from a ``Seq2SeqEncoder``, with shape ``(batch_size, sequence_length,
+    encoding_dim)``, this method returns the final hidden state for each element of the batch,
+    giving a tensor of shape ``(batch_size, encoding_dim)``.  This is not as simple as
+    ``encoder_outputs[:, -1]``, because the sequences could have different lengths.  We use the
+    mask (which has shape ``(batch_size, sequence_length)``) to find the final state for each batch
+    instance.
+
+    Additionally, if ``bidirectional`` is ``True``, we will split the final dimension of the
+    ``encoder_outputs`` into two and assume that the first half is for the forward direction of the
+    encoder and the second half is for the backward direction.  We will concatenate the last state
+    for each encoder dimension, giving ``encoder_outputs[:, -1, :encoding_dim/2]`` concated with
+    ``encoder_outputs[:, 0, encoding_dim/2:]``.
+    """
+    # These are the indices of the last words in the sequences (i.e. length sans padding - 1).  We
+    # are assuming sequences are right padded.
+    # Shape: (batch_size,)
+    last_word_indices = mask.sum(1).long() - 1
+    batch_size, _, encoder_output_dim = encoder_outputs.size()
+    expanded_indices = last_word_indices.view(-1, 1, 1).expand(batch_size, 1, encoder_output_dim)
+    # Shape: (batch_size, 1, encoder_output_dim)
+    final_encoder_output = encoder_outputs.gather(1, expanded_indices)
+    final_encoder_output = final_encoder_output.squeeze(1)  # (batch_size, encoder_output_dim)
+    if bidirectional:
+        final_forward_output = final_encoder_output[:, :(encoder_output_dim // 2)]
+        final_backward_output = encoder_outputs[:, 0, (encoder_output_dim // 2):]
+        final_encoder_output = torch.cat([final_forward_output, final_backward_output], dim=-1)
+    return final_encoder_output
+
+
 def get_dropout_mask(dropout_probability: float, tensor_for_masking: torch.autograd.Variable):
     """
     Computes and returns an element-wise dropout mask for a given tensor, where
@@ -391,7 +424,8 @@ def weighted_sum(matrix: torch.Tensor, attention: torch.Tensor) -> torch.Tensor:
 def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
                                        targets: torch.LongTensor,
                                        weights: torch.FloatTensor,
-                                       batch_average: bool = True) -> torch.FloatTensor:
+                                       batch_average: bool = True,
+                                       label_smoothing: float = None) -> torch.FloatTensor:
     """
     Computes the cross entropy loss of a sequence, weighted with respect to
     some user provided weights. Note that the weighting here is not the same as
@@ -412,6 +446,11 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
     batch_average : bool, optional, (default = True).
         A bool indicating whether the loss should be averaged across the batch,
         or returned as a vector of losses per batch element.
+    label_smoothing : ``float``, optional (default = None)
+        Whether or not to apply label smoothing to the cross-entropy loss.
+        For example, with a label smoothing value of 0.2, a 4 class classifcation
+        target would look like ``[0.05, 0.05, 0.85, 0.05]`` if the 3rd class was
+        the correct label.
 
     Returns
     -------
@@ -427,11 +466,20 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
     # shape : (batch * max_len, 1)
     targets_flat = targets.view(-1, 1).long()
 
-    # Contribution to the negative log likelihood only comes from the exact indices
-    # of the targets, as the target distributions are one-hot. Here we use torch.gather
-    # to extract the indices of the num_classes dimension which contribute to the loss.
-    # shape : (batch * sequence_length, 1)
-    negative_log_likelihood_flat = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
+    if label_smoothing is not None and label_smoothing > 0.0:
+        num_classes = logits.size(-1)
+        smoothing_value = label_smoothing / num_classes
+        # Fill all the correct indices with 1 - smoothing value.
+        one_hot_targets = zeros_like(log_probs_flat).scatter_(-1, targets_flat, 1.0 - label_smoothing)
+        smoothed_targets = one_hot_targets + smoothing_value
+        negative_log_likelihood_flat = - log_probs_flat * smoothed_targets
+        negative_log_likelihood_flat = negative_log_likelihood_flat.sum(-1, keepdim=True)
+    else:
+        # Contribution to the negative log likelihood only comes from the exact indices
+        # of the targets, as the target distributions are one-hot. Here we use torch.gather
+        # to extract the indices of the num_classes dimension which contribute to the loss.
+        # shape : (batch * sequence_length, 1)
+        negative_log_likelihood_flat = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
     # shape : (batch, sequence_length)
     negative_log_likelihood = negative_log_likelihood_flat.view(*targets.size())
     # shape : (batch, sequence_length)
@@ -480,6 +528,14 @@ def ones_like(tensor: torch.Tensor) -> torch.Tensor:
     device at runtime.
     """
     return tensor.clone().fill_(1)
+
+
+def zeros_like(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Use clone() + fill_() to make sure that a zeros tensor ends up on the right
+    device at runtime.
+    """
+    return tensor.clone().fill_(0)
 
 
 def combine_tensors(combination: str, tensors: List[torch.Tensor]) -> torch.Tensor:

@@ -59,6 +59,19 @@ class TestNnUtil(AllenNlpTestCase):
         with pytest.raises(ConfigurationError):
             _ = util.sort_batch_by_length(tensor, sequence_lengths)
 
+    def test_get_final_encoder_states(self):
+        encoder_outputs = Variable(torch.Tensor([[[1, 2, 3, 4],
+                                                  [5, 6, 7, 8],
+                                                  [9, 10, 11, 12]],
+                                                 [[13, 14, 15, 16],
+                                                  [17, 18, 19, 20],
+                                                  [21, 22, 23, 24]]]))
+        mask = Variable(torch.Tensor([[1, 1, 1], [1, 1, 0]]))
+        final_states = util.get_final_encoder_states(encoder_outputs, mask, bidirectional=False)
+        assert_almost_equal(final_states.data.numpy(), [[9, 10, 11, 12], [17, 18, 19, 20]])
+        final_states = util.get_final_encoder_states(encoder_outputs, mask, bidirectional=True)
+        assert_almost_equal(final_states.data.numpy(), [[9, 10, 3, 4], [17, 18, 15, 16]])
+
     def test_masked_softmax_no_mask(self):
         # Testing the general unmasked 1D case.
         vector_1d = Variable(torch.FloatTensor([[1.0, 2.0, 3.0]]))
@@ -422,10 +435,10 @@ class TestNnUtil(AllenNlpTestCase):
         tensor[3, :, :] = 0
         weights = (tensor != 0.0)[:, :, 0].long().squeeze(-1)
         tensor2 = tensor.clone()
-        tensor[0, 3:, :] = 2
-        tensor[1, 4:, :] = 13
-        tensor[2, 2:, :] = 234
-        tensor[3, :, :] = 65
+        tensor2[0, 3:, :] = 2
+        tensor2[1, 4:, :] = 13
+        tensor2[2, 2:, :] = 234
+        tensor2[3, :, :] = 65
         targets = torch.LongTensor(numpy.random.randint(0, 3, [5, 7]))
         targets *= weights
 
@@ -436,6 +449,25 @@ class TestNnUtil(AllenNlpTestCase):
         loss = util.sequence_cross_entropy_with_logits(tensor, targets, weights)
         loss2 = util.sequence_cross_entropy_with_logits(tensor2, targets, weights)
         assert loss.data.numpy() == loss2.data.numpy()
+
+    def test_sequence_cross_entropy_with_logits_smooths_labels_correctly(self):
+        tensor = torch.rand([1, 3, 4])
+        targets = torch.LongTensor(numpy.random.randint(0, 3, [1, 3]))
+
+        tensor = Variable(tensor)
+        targets = Variable(targets)
+        weights = Variable(torch.ones([2, 3]))
+        loss = util.sequence_cross_entropy_with_logits(tensor, targets, weights, label_smoothing=0.1)
+
+        correct_loss = 0.0
+        for prediction, label in zip(tensor.squeeze(0), targets.squeeze(0)):
+            prediction = torch.nn.functional.log_softmax(prediction)
+            correct_loss += prediction[label] * 0.9
+            # incorrect elements
+            correct_loss += prediction.sum() * 0.1/4
+        # Average over sequence.
+        correct_loss = - correct_loss / 3
+        numpy.testing.assert_array_almost_equal(loss.data.numpy(), correct_loss.data.numpy())
 
     def test_sequence_cross_entropy_with_logits_averages_batch_correctly(self):
         # test batch average is the same as dividing the batch averaged

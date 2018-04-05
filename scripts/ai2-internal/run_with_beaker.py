@@ -9,6 +9,10 @@ import subprocess
 import sys
 from typing import List
 
+# This has to happen before we import spacy (even indirectly), because for some crazy reason spacy
+# thought it was a good idea to set the random seed on import...
+random_int = random.randint(0, 2**32)
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(os.path.join(os.path.join(__file__, os.pardir), os.pardir))))
 
 from allennlp.commands.train import Train
@@ -31,13 +35,16 @@ def main(param_file: str, extra_beaker_commands: List[str]):
     # If the git repository is dirty, add a random hash.
     result = subprocess.run('git diff-index --quiet HEAD --', shell=True)
     if result.returncode != 0:
-        dirty_hash = "%x" % random.getrandbits(32)
+        dirty_hash = "%x" % random_int
         image += "-" + dirty_hash
 
     # Get temporary ecr login. For this command to work, you need the python awscli
     # package with a version more recent than 1.11.91.
+    print("Generating ECR Login Command")
+    login_command = subprocess.check_output('aws --region=us-west-2 ecr get-login --no-include-email', shell=True)
+
     print("Logging into ECR")
-    subprocess.run('eval $(aws --region=us-west-2 ecr get-login --no-include-email)', shell=True, check=True)
+    subprocess.run(login_command, shell=True, check=True)
 
     print(f"Building the Docker image ({image})")
     subprocess.run(f'docker build -t {image} .', shell=True, check=True)
