@@ -67,7 +67,10 @@ ENV SOURCE_COMMIT $SOURCE_COMMIT
 LABEL maintainer="allennlp-contact@allenai.org"
 
 # Cache the DEFAULT_MODELS during build
-RUN python -c "from allennlp.commands import serve; s = serve.Serve(); predictors = [ demo_model.predictor() for name, demo_model in s.trained_models.items()];"
+RUN python -c "from allennlp.commands.serve import *; predictors = [ DEFAULT_MODELS[name].predictor() for name in DEFAULT_MODELS];"
+RUN python -c "from allennlp.commands.elmo import ElmoEmbedder; elmoEmbedder = ElmoEmbedder();"
+
+ENV FLASK_DEBUG 1
 
 EXPOSE 8000
 CMD ["python", "-m", "allennlp.run", "serve"]
