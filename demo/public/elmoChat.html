@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en-us">
+
+<head>
+  <meta charset="utf-8" />
+  <title>ELMoChat - Demo</title>
+  <script>
+    async function handleInput(event) {
+      if (event.key.toLowerCase() == "enter") {
+        let inputText = event.target.value
+        let elmoDetails = await fetchELMo([inputText])
+        let tokens = elmoDetails.tokens
+        let vectors = elmoDetails.vectors
+        let tiles = []
+        for (i = 0; i < tokens.length; i++) {
+          let token = tokens[i]
+          let w = Math.max(token.length * 8, 50)
+          let hw = w / 2
+          const x2 = vectors[0][i][0] * 50 + hw
+          const y2 = vectors[0][i][1] * 50 + hw
+          const x2red = vectors[1][i][0] * 50 + hw
+          const y2red = vectors[1][i][1] * 50 + hw
+          const x2blue = vectors[2][i][0] * 50 + hw
+          const y2blue = vectors[2][i][1] * 50 + hw
+          let vectorGraphic = `<circle cx="${hw}" cy="25" r="2" stroke="black"></circle>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2}" y2="${y2}" stroke="black"></line>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2red}" y2="${y2red}" stroke="red"></line>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2blue}" y2="${y2blue}" stroke="blue"></line>`
+          let textGraphic = `<text x="${hw}" y="60" text-anchor="middle">` + token + '</text>'
+          tiles.push(`<svg height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
+        }
+        let formatted = "<div>" + tiles.join(" ") + "</div>"
+        document.getElementById("transcript").insertAdjacentHTML('beforeend', formatted)
+        event.target.value = ""
+      }
+    }
+
+    async function fetchELMo(sentences) {
+      let response = await fetch("/elmo", {
+        method: "POST",
+        body: JSON.stringify({ sentences }),
+      })
+      let data = await response.json()
+      return data[0]
+    }
+  </script>
+</head>
+
+<body>
+  <div id="root">
+    <div>
+      <input type="text" size="60" onkeypress="handleInput(event)">
+    </div>
+    <div id="transcript">
+
+    </div>
+  </div>
+</body>
+
+</html>
