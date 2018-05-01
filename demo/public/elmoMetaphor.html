@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en-us">
+
+<head>
+  <meta charset="utf-8" />
+  <title>ELMoChat - Demo</title>
+  <style>
+    .transcript {
+      padding: 10px;
+      max-width: calc(100% - 200px);
+    }
+
+    .metaphor {
+      position: absolute;
+      right: 10px;
+      top: 40px;
+      width: 200px;
+      height: 100px;
+      font-family: 'Helvetica';
+      font-size: larger;
+      text-align: center;
+    }
+
+    .metaphor div {
+      padding: 2px;
+    }
+  </style>
+  <script src="https://unpkg.com/mathjs@4.1.2/dist/math.min.js"></script>
+  <script>
+    //map word to elmoDetails and sentence
+    let elmoData = {}
+
+    let layer = 0
+    let currentMetaphorTarget = 0
+    let metaphor = [
+      { token: "?", vectors: [] },
+      { token: "?", vectors: [] },
+      { token: "?", vectors: [] },
+      { token: "?", vectors: [] },
+    ]
+
+    function findTokenParent(element) {
+      let result = element
+      while (!result.dataset.token) {
+        result = result.parentElement
+      }
+      return result
+    }
+
+    function handleTileClick(event) {
+      const tokenParent = findTokenParent(event.target)
+      const token = tokenParent.dataset.token;
+      metaphor[currentMetaphorTarget].token = token
+      metaphor[currentMetaphorTarget].vectors = elmoData[token].vectors
+      let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token)
+      document.getElementById("metaphor").innerHTML = metaphorText
+
+      currentMetaphorTarget += 1
+      if (currentMetaphorTarget > 2) {
+        currentMetaphorTarget = 0
+        setTimeout(updateMetaphor)
+      }
+    }
+
+    function updateMetaphor() {
+      const delta = math.subtract(metaphor[1].vectors[layer], metaphor[0].vectors[layer])
+      const base = metaphor[2].vectors[layer]
+      const ignore = metaphor[1].token
+      const aligned = findAligned(delta, base, ignore)
+      metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, aligned.word)
+      document.getElementById("metaphor").innerHTML = metaphorText
+      metaphor.forEach(item => {
+        item.token = "?"
+        item.vectors = []
+      })
+    }
+
+    function metaphorHTML(a, b, c, d) {
+      return `<div>${a}:${b}</div> <div>::</div> <div>${c}:${d}</div>`
+    }
+
+    async function handleInput(event) {
+      if (event.key.toLowerCase() == "enter") {
+        let sentence = event.target.value
+        //TODO: factor with setup()
+        let elmoDetails = await fetchELMo([sentence])
+        let tokens = elmoDetails.tokens
+        let sentenceVectors = elmoDetails.vectors
+        let tiles = []
+        for (i = 0; i < tokens.length; i++) {
+          let token = tokens[i]
+          let vectors = sentenceVectors.map(vector => vector[i])
+          elmoData[token] = {
+            token, vectors, sentence
+          }
+          let w = Math.max(token.length * 8, 50)
+          let hw = w / 2
+          const x2 = sentenceVectors[0][i][0] * 50 + hw
+          const y2 = sentenceVectors[0][i][1] * 50 + hw
+          const x2red = sentenceVectors[1][i][0] * 50 + hw
+          const y2red = sentenceVectors[1][i][1] * 50 + hw
+          const x2blue = sentenceVectors[2][i][0] * 50 + hw
+          const y2blue = sentenceVectors[2][i][1] * 50 + hw
+          let vectorGraphic = `<circle cx="${hw}" cy="25" r="2" stroke="black"></circle>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2}" y2="${y2}" stroke="black"></line>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2red}" y2="${y2red}" stroke="red"></line>`
+          vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2blue}" y2="${y2blue}" stroke="blue"></line>`
+          let textGraphic = `<text x="${hw}" y="60" text-anchor="middle">` + token + '</text>'
+          tiles.push(`<svg onclick="handleTileClick(event)" data-token="${token}"height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
+        }
+        let formatted = "<div>" + tiles.join(" ") + "</div>"
+        document.getElementById("transcript").insertAdjacentHTML('beforeend', formatted)
+        event.target.value = ""
+      }
+    }
+
+    function handleLayerChange(event) {
+      layer = event.target.value
+      console.log(`Using ELMo layer ${layer}.`)
+    }
+
+    async function setup() {
+      const rawSentences = await fetchSentences()
+      const sentences = rawSentences.split("\n")
+      console.log(sentences)
+      for (let sentence of sentences) {
+        const elmoDetails = await fetchELMo([sentence])
+        const tokens = elmoDetails.tokens
+        const sentenceVectors = elmoDetails.vectors
+        const word = tokens[0]
+        for (i = 0; i < tokens.length; i++) {
+          let token = tokens[i]
+          let vectors = sentenceVectors.map(vector => vector[i])
+          elmoData[token] = {
+            token, vectors, sentence
+          }
+        }
+      }
+    }
+
+    function unit(vector) {
+      return math.multiply(vector, 1 / math.hypot(vector))
+    }
+
+    function findAligned(delta, base, ignore) {
+      delta = unit(delta)
+      let best = { word: "", dot: -1 }
+      for (let word in elmoData) {
+        if (word == ignore) {
+          continue;
+        }
+        const candidate = elmoData[word]
+        const dot = math.multiply(delta, unit(math.subtract(candidate.vectors[layer], base)))
+        if (dot > best.dot) {
+          best = { word, dot }
+        }
+      }
+      return best
+    }
+
+    async function fetchSentences() {
+      let response = await fetch("dictionary.txt")
+      let data = await response.text()
+      return data
+    }
+
+    async function fetchELMo(sentences) {
+      console.log("fetchELMo", sentences)
+      let response = await fetch("/elmo", {
+        method: "POST",
+        body: JSON.stringify({ sentences }),
+      })
+      let data = await response.json()
+      return data[0]
+    }
+
+    setup()
+  </script>
+</head>
+
+<body>
+  <div id="root">
+    <div>
+      <input type="text" size="60" onkeypress="handleInput(event)">
+      <select onchange="handleLayerChange(event)">
+        <option value="0">0</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+      </select>
+    </div>
+    <div class="metaphor" id="metaphor">
+    </div>
+    <div class="transcript" id="transcript">
+    </div>
+</body>
+
+</html>
