@@ -24,11 +24,16 @@
     .metaphor div {
       padding: 2px;
     }
+
+    .metaphor .sentence {
+      font-size: smaller;
+    }
   </style>
   <script src="https://unpkg.com/mathjs@4.1.2/dist/math.min.js"></script>
   <script>
     //map word to elmoDetails and sentence
-    let elmoData = {}
+    let elmoDataIndex = {}
+    let elmoData = []
 
     let layer = 0
     let currentMetaphorTarget = 0
@@ -50,9 +55,10 @@
     function handleTileClick(event) {
       const tokenParent = findTokenParent(event.target)
       const token = tokenParent.dataset.token;
+      const index = tokenParent.dataset.index;
       metaphor[currentMetaphorTarget].token = token
-      metaphor[currentMetaphorTarget].vectors = elmoData[token].vectors
-      let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token)
+      metaphor[currentMetaphorTarget].vectors = elmoData[index].vectors
+      let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, metaphor[3].sentence)
       document.getElementById("metaphor").innerHTML = metaphorText
 
       currentMetaphorTarget += 1
@@ -67,16 +73,51 @@
       const base = metaphor[2].vectors[layer]
       const ignore = metaphor[1].token
       const aligned = findAligned(delta, base, ignore)
-      metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, aligned.word)
+      metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, aligned.word, aligned.sentence)
       document.getElementById("metaphor").innerHTML = metaphorText
       metaphor.forEach(item => {
         item.token = "?"
         item.vectors = []
+        item.sentence = ""
       })
     }
 
-    function metaphorHTML(a, b, c, d) {
-      return `<div>${a}:${b}</div> <div>::</div> <div>${c}:${d}</div>`
+    function metaphorHTML(a, b, c, d, sentence = "") {
+      return `<div>${a}:${b}</div> <div>::</div> <div>${c}:${d}</div><div class="sentence">${sentence}</div>`
+    }
+
+    function updateELMoDataIndex(token) {
+      let tokenIndex = elmoDataIndex[token] || []
+      let index = elmoData.length
+      tokenIndex.push(index)
+      elmoDataIndex[token] = tokenIndex
+      return index
+    }
+
+    function vectorEquality(u, v) {
+      for (let i = 0; i < u.length; i++) {
+        for (let j = 0; j < u[i].length; j++) {
+          if (u[i][j] != v[i][j]) {
+            return false
+          }
+        }
+      }
+      return true
+    }
+
+    function addELMoData(data) {
+      const existing = elmoDataIndex[data.token] || []
+      for (let index in existing) {
+        //need vector hash or approximate ball
+        const existingData = elmoData[index]
+        if (vectorEquality(existingData.vectors, data.vectors)) {
+          console.log("not adding existing vector for ", data.token)
+          return index
+        }
+      }
+      let index = updateELMoDataIndex(data.token)
+      elmoData.push(data)
+      return index
     }
 
     async function handleInput(event) {
@@ -87,12 +128,12 @@
         let tokens = elmoDetails.tokens
         let sentenceVectors = elmoDetails.vectors
         let tiles = []
-        for (i = 0; i < tokens.length; i++) {
+        for (let i = 0; i < tokens.length; i++) {
           let token = tokens[i]
           let vectors = sentenceVectors.map(vector => vector[i])
-          elmoData[token] = {
+          let index = addELMoData({
             token, vectors, sentence
-          }
+          })
           let w = Math.max(token.length * 8, 50)
           let hw = w / 2
           const x2 = sentenceVectors[0][i][0] * 50 + hw
@@ -106,7 +147,7 @@
           vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2red}" y2="${y2red}" stroke="red"></line>`
           vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2blue}" y2="${y2blue}" stroke="blue"></line>`
           let textGraphic = `<text x="${hw}" y="60" text-anchor="middle">` + token + '</text>'
-          tiles.push(`<svg onclick="handleTileClick(event)" data-token="${token}"height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
+          tiles.push(`<svg onclick="handleTileClick(event)" data-index="${index}" data-token="${token}"height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
         }
         let formatted = "<div>" + tiles.join(" ") + "</div>"
         document.getElementById("transcript").insertAdjacentHTML('beforeend', formatted)
@@ -131,9 +172,9 @@
         for (i = 0; i < tokens.length; i++) {
           let token = tokens[i]
           let vectors = sentenceVectors.map(vector => vector[i])
-          elmoData[token] = {
+          addELMoData({
             token, vectors, sentence
-          }
+          })
         }
       }
     }
@@ -145,14 +186,15 @@
     function findAligned(delta, base, ignore) {
       delta = unit(delta)
       let best = { word: "", dot: -1 }
-      for (let word in elmoData) {
+      for (let candidate of elmoData) {
+        const word = candidate.token
         if (word == ignore) {
           continue;
         }
-        const candidate = elmoData[word]
         const dot = math.multiply(delta, unit(math.subtract(candidate.vectors[layer], base)))
         if (dot > best.dot) {
-          best = { word, dot }
+          const sentence = candidate.sentence
+          best = { word, dot, sentence }
         }
       }
       return best
