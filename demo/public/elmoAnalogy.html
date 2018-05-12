@@ -42,8 +42,36 @@
   <script src="https://unpkg.com/mathjs@4.1.2/dist/math.min.js"></script>
   <script>
     //map word to elmoDetails and sentence
+    const workerCount = navigator.hardwareConcurrency || 4
     let elmoDataIndex = {}
     let elmoData = []
+    let elmoWorkers = []
+    let elmoCallbacks = {}
+    let joins = {}
+
+    for (let i = 0; i < workerCount; i++) {
+      const worker = new Worker('elmoWorker.js')
+      worker.postMessage({ cmd: "id", id: i })
+      worker.addEventListener('message', function (e) {
+        const data = e.data
+        const ticket = data.ticket
+        const join = data.join
+        if (ticket) {
+          elmoCallbacks[ticket](data)
+          delete elmoCallbacks[ticket]
+        } else if (join) {
+          let results = joins[join] || []
+          results.push(data)
+          joins[join] = results
+          if (results.length == elmoWorkers.length) {
+            elmoCallbacks[join](results)
+            delete joins[join]
+          }
+        }
+      }, false);
+
+      elmoWorkers.push(worker)
+    }
 
     let layer = 0
     let currentMetaphorTarget = 0
@@ -64,31 +92,33 @@
 
     function handleTileClick(event) {
       const tokenParent = findTokenParent(event.target)
-      const token = tokenParent.dataset.token;
-      const index = tokenParent.dataset.index;
+      const token = tokenParent.dataset.token
+      const elmoIndex = tokenParent.dataset.index
       metaphor[currentMetaphorTarget].token = token
-      metaphor[currentMetaphorTarget].vectors = elmoData[index].vectors
+      findELMoData(elmoIndex, (data) => {
+        metaphor[currentMetaphorTarget].vectors = data.vectors
+        currentMetaphorTarget += 1
+        if (currentMetaphorTarget > 2) {
+          currentMetaphorTarget = 0
+          updateMetaphor()
+        }
+      })
       let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, metaphor[3].sentence)
       document.getElementById("metaphor").innerHTML = metaphorText
-
-      currentMetaphorTarget += 1
-      if (currentMetaphorTarget > 2) {
-        currentMetaphorTarget = 0
-        setTimeout(updateMetaphor)
-      }
     }
 
     function updateMetaphor() {
       const delta = math.subtract(metaphor[1].vectors[layer], metaphor[0].vectors[layer])
       const base = metaphor[2].vectors[layer]
       const ignore = metaphor[1].token
-      const aligned = findAligned(delta, base, ignore)
-      metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, aligned.word, aligned.sentence)
-      document.getElementById("metaphor").innerHTML = metaphorText
-      metaphor.forEach(item => {
-        item.token = "?"
-        item.vectors = []
-        item.sentence = ""
+      findAligned(delta, base, ignore, (aligned) => {
+        metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, aligned.word, aligned.sentence)
+        document.getElementById("metaphor").innerHTML = metaphorText
+        metaphor.forEach(item => {
+          item.token = "?"
+          item.vectors = []
+          item.sentence = ""
+        })
       })
     }
 
@@ -115,19 +145,43 @@
       return true
     }
 
-    function addELMoData(data) {
-      const existing = elmoDataIndex[data.token] || []
-      for (let index in existing) {
-        //need vector hash or approximate ball
-        const existingData = elmoData[index]
-        if (vectorEquality(existingData.vectors, data.vectors)) {
-          console.log("not adding existing vector for ", data.token)
-          return index
-        }
+    let nextTicketIndex = 1
+    function nextTicket() {
+      const result = nextTicketIndex
+      nextTicketIndex += 1
+      return result
+    }
+
+    let nextWorkerIndex = 0
+    function nextWorker() {
+      const result = nextWorkerIndex
+      nextWorkerIndex += 1
+      if (nextWorkerIndex >= elmoWorkers.length) {
+        nextWorkerIndex = 0
       }
-      let index = updateELMoDataIndex(data.token)
-      elmoData.push(data)
-      return index
+      return result
+    }
+
+    function addELMoData(data, callback) {
+      const cmd = 'addELMoData'
+      let ticket = null
+      if (callback) {
+        ticket = nextTicket()
+        elmoCallbacks[ticket] = callback
+      }
+      elmoWorkers[nextWorker()].postMessage({ cmd, ticket, ...data })
+      return ticket
+    }
+
+    function findELMoData(indexParts, callback) {
+      const cmd = 'findELMoData'
+      const parts = indexParts.split(":")
+      const workerID = parts[0]
+      const index = parts[1]
+      let ticket = nextTicket()
+      elmoCallbacks[ticket] = callback
+      elmoWorkers[workerID].postMessage({ cmd, ticket, index })
+      return ticket
     }
 
     async function handleInput(event) {
@@ -141,8 +195,11 @@
         for (let i = 0; i < tokens.length; i++) {
           let token = tokens[i]
           let vectors = sentenceVectors.map(vector => vector[i])
-          let index = addELMoData({
+          const index = "-"
+          let ticket = addELMoData({
             token, vectors, sentence
+          }, (data) => {
+            document.getElementById(`${data.ticket}`).dataset.index = `${data.id}:${data.index}`
           })
           let w = Math.max(token.length * 8, 50)
           let hw = w / 2
@@ -157,7 +214,7 @@
           vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2red}" y2="${y2red}" stroke="red"></line>`
           vectorGraphic += `<line x1="${hw}" y1="25" x2="${x2blue}" y2="${y2blue}" stroke="blue"></line>`
           let textGraphic = `<text x="${hw}" y="60" text-anchor="middle">` + token + '</text>'
-          tiles.push(`<svg onclick="handleTileClick(event)" data-index="${index}" data-token="${token}"height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
+          tiles.push(`<svg id="${ticket}" onclick="handleTileClick(event)" data-index="${index}" data-token="${token}"height="70" width="${w}">` + vectorGraphic + textGraphic + '</svg>')
         }
         let formatted = "<div>" + tiles.join(" ") + "</div>"
         document.getElementById("transcript").insertAdjacentHTML('beforeend', formatted)
@@ -167,6 +224,10 @@
 
     function handleLayerChange(event) {
       layer = event.target.value
+      const cmd = 'setLayer'
+      for (let worker of elmoWorkers) {
+        worker.postMessage({ cmd, layer })
+      }
       console.log(`Using ELMo layer ${layer}.`)
     }
 
@@ -193,21 +254,31 @@
       return math.multiply(vector, 1 / math.hypot(vector))
     }
 
-    function findAligned(delta, base, ignore) {
+    function findAligned(delta, base, ignore, callback) {
       delta = unit(delta)
       let best = { word: "", dot: -1 }
-      for (let candidate of elmoData) {
-        const word = candidate.token
-        if (word == ignore) {
-          continue;
+      let join = nextTicket()
+      elmoCallbacks[join] = (allData) => {
+        //need to extract best from candidate
+        for (let workerData of allData) {
+          const candidate = workerData.best
+          const word = candidate.word
+          const dot = candidate.dot
+          if (word == ignore) {
+            continue;
+          }
+          if (dot > best.dot) {
+            const sentence = candidate.sentence
+            best = { word, dot, sentence }
+          }
         }
-        const dot = math.multiply(delta, unit(math.subtract(candidate.vectors[layer], base)))
-        if (dot > best.dot) {
-          const sentence = candidate.sentence
-          best = { word, dot, sentence }
-        }
+        callback(best)
       }
-      return best
+
+      const cmd = 'findAligned'
+      for (let worker of elmoWorkers) {
+        worker.postMessage({ cmd, join, delta, base, ignore })
+      }
     }
 
     async function fetchSentences() {
