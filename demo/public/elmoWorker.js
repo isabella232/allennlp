@@ -60,12 +60,31 @@ function findAligned(delta, base, ignore) {
   return best
 }
 
+function findOrthogonal(vector, ignore) {
+  vector = unit(vector)
+  let best = { word: "", dot: 1000000 }
+  for (let candidate of elmoData) {
+    const word = candidate.token
+    if (word == ignore) {
+      continue;
+    }
+    const dot = math.abs(math.multiply(vector, unit(candidate.vectors[layer])))
+    if (dot < best.dot) {
+      const sentence = candidate.sentence
+      best = { word, dot, sentence }
+    }
+  }
+  return best
+}
+
+
 addEventListener('message', function (e) {
   var data = e.data;
   const cmd = data.cmd
   const ticket = data.ticket
   const join = data.join
   let index = null
+  let best = null
   switch (cmd) {
     case 'id':
       id = data.id
@@ -81,7 +100,11 @@ addEventListener('message', function (e) {
       postMessage({ ...foundData, id, ticket, cmd });
       break;
     case 'findAligned':
-      const best = findAligned(data.delta, data.base, data.ignore)
+      best = findAligned(data.delta, data.base, data.ignore)
+      postMessage({ id, cmd, join, best });
+      break;
+    case 'findOrthogonal':
+      best = findOrthogonal(data.vector, data.ignore)
       postMessage({ id, cmd, join, best });
       break;
     case 'setLayer':

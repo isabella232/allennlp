@@ -95,16 +95,55 @@
       const token = tokenParent.dataset.token
       const elmoIndex = tokenParent.dataset.index
       metaphor[currentMetaphorTarget].token = token
+      const oldMetaphorTarget = currentMetaphorTarget
+      currentMetaphorTarget += 1
+      if (currentMetaphorTarget > 2) {
+        currentMetaphorTarget = 0
+      }
+      let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, metaphor[3].sentence)
+      document.getElementById("metaphor").innerHTML = metaphorText
       findELMoData(elmoIndex, (data) => {
-        metaphor[currentMetaphorTarget].vectors = data.vectors
-        currentMetaphorTarget += 1
-        if (currentMetaphorTarget > 2) {
-          currentMetaphorTarget = 0
+        metaphor[oldMetaphorTarget].vectors = data.vectors
+        if (oldMetaphorTarget == 0) {
+          findAntonym()
+        }
+        if (oldMetaphorTarget == 2) {
           updateMetaphor()
         }
       })
-      let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, metaphor[3].sentence)
-      document.getElementById("metaphor").innerHTML = metaphorText
+    }
+
+    //not synonym at all
+    function findSynonym() {
+      const delta = math.multiply(metaphor[0].vectors[layer], -1)
+      const base = math.zeros([metaphor[0].vectors[layer].length])
+      const ignore = metaphor[0].token
+      findAligned(delta, base, ignore, (aligned) => {
+        console.log("Synonym", ignore, aligned.word, aligned.sentence)
+        let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, `<b>Synonym: ${aligned.word}</b> ${aligned.sentence}`)
+        document.getElementById("metaphor").innerHTML = metaphorText
+      })
+    }
+
+    function findLeastRelated() {
+      const vector = metaphor[0].vectors[layer]
+      const ignore = metaphor[0].token
+      findOrthogonal(vector, ignore, (aligned) => {
+        console.log("Orthogonal", ignore, aligned.word, aligned.sentence)
+        let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, `<b>Orthogonal: ${aligned.word}</b> ${aligned.sentence}`)
+        document.getElementById("metaphor").innerHTML = metaphorText
+      })
+    }
+
+    function findAntonym() {
+      const delta = metaphor[0].vectors[layer]
+      const base = math.zeros([metaphor[0].vectors[layer].length])
+      const ignore = metaphor[0].token
+      findAligned(delta, base, ignore, (aligned) => {
+        console.log("Antonym", ignore, aligned.word, aligned.sentence)
+        let metaphorText = metaphorHTML(metaphor[0].token, metaphor[1].token, metaphor[2].token, metaphor[3].token, `<b>Antonym: ${aligned.word}</b> ${aligned.sentence}`)
+        document.getElementById("metaphor").innerHTML = metaphorText
+      })
     }
 
     function updateMetaphor() {
@@ -278,6 +317,32 @@
       const cmd = 'findAligned'
       for (let worker of elmoWorkers) {
         worker.postMessage({ cmd, join, delta, base, ignore })
+      }
+    }
+
+    function findOrthogonal(vector, ignore, callback) {
+      let best = { word: "", dot: 1000000 }
+      let join = nextTicket()
+      elmoCallbacks[join] = (allData) => {
+        //need to extract best from candidate
+        for (let workerData of allData) {
+          const candidate = workerData.best
+          const word = candidate.word
+          const dot = candidate.dot
+          if (word == ignore) {
+            continue;
+          }
+          if (dot < best.dot) {
+            const sentence = candidate.sentence
+            best = { word, dot, sentence }
+          }
+        }
+        callback(best)
+      }
+
+      const cmd = 'findOrthogonal'
+      for (let worker of elmoWorkers) {
+        worker.postMessage({ cmd, join, vector, ignore })
       }
     }
 
