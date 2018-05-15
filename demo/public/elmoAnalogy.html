@@ -48,6 +48,7 @@
     let elmoWorkers = []
     let elmoCallbacks = {}
     let joins = {}
+    const queryParameters = getQueryParameters()
 
     for (let i = 0; i < workerCount; i++) {
       const worker = new Worker('elmoWorker.js')
@@ -352,6 +353,14 @@
       return data
     }
 
+    function getQueryParameters() {
+      const pairs = document.location.search.substring(1).split("&")
+      const splitPairs = pairs.map(pair => pair.split("="))
+      let result = {}
+      splitPairs.forEach(pair => result[pair[0]] = pair[1])
+      return result
+    }
+
     async function fetchELMo(sentences) {
       console.log("fetchELMo", sentences)
       let response = await fetch("/elmo", {
@@ -359,7 +368,15 @@
         body: JSON.stringify({ sentences }),
       })
       let data = await response.json()
-      return data[0]
+      const dimension = queryParameters["d"]
+      let result = data[0]
+      if (dimension) {
+        let vectors = result.vectors
+        for (i = 0; i < vectors.length; i++) {
+          vectors[i] = vectors[i].map(wordVector => wordVector.slice(0, dimension))
+        }
+      }
+      return result
     }
 
     setup()
